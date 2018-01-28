@@ -18,6 +18,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common;
 using MediaBrowser.Model.MediaInfo;
+using MediaBrowser.Model.Dto;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -307,11 +308,11 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
 
-        public async Task<IEnumerable<ChannelMediaInfo>> GetChannelItemMediaInfo(string id,
+        public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id,
             CancellationToken cancellationToken)
         {
             var channelID = id.Split('_');
-            var items = new List<ChannelMediaInfo>();
+            var items = new List<MediaSourceInfo>();
 
             using (var outerResponse = await _httpClient.SendAsync(new HttpRequestOptions
             {
@@ -359,7 +360,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                                     items.Add(new ChannelMediaInfo
                                                     {
                                                         Path = file.ToLower()
-                                                    });
+                                                    }.ToMediaSource());
                                                 }
                                             }
                                         }
@@ -390,7 +391,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                                         items.Add(new ChannelMediaInfo
                                                         {
                                                             Path = url2
-                                                        });
+                                                        }.ToMediaSource());
                                                     }
                                                 }
                                             }
@@ -420,7 +421,7 @@ namespace MediaBrowser.Plugins.TuneIn
             return items;
         }
 
-        private ChannelMediaInfo GetMediaInfoFromUrl(string url)
+        private MediaSourceInfo GetMediaInfoFromUrl(string url)
         {
             var container = url.EndsWith("aac", StringComparison.OrdinalIgnoreCase) ? "aac" : "mp3";
 
@@ -432,7 +433,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 AudioBitrate = 128000,
                 AudioChannels = 2,
                 SupportsDirectPlay = true
-            };
+            }.ToMediaSource();
         }
 
         public Task<DynamicImageResponse> GetChannelImage(ImageType type, CancellationToken cancellationToken)
