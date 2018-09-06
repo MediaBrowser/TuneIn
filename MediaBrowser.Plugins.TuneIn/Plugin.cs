@@ -5,6 +5,8 @@ using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 using MediaBrowser.Plugins.TuneIn.Configuration;
+using System.IO;
+using MediaBrowser.Model.Drawing;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -56,6 +58,20 @@ namespace MediaBrowser.Plugins.TuneIn
             get
             {
                 return "TuneIn streams in your collection.";
+            }
+        }
+
+        public Stream GetThumbImage()
+        {
+            var type = GetType();
+            return type.Assembly.GetManifestResourceStream(type.Namespace + ".thumb.png");
+        }
+
+        public ImageFormat ThumbImageFormat
+        {
+            get
+            {
+                return ImageFormat.Png;
             }
         }
 
