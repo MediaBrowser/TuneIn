@@ -84,10 +84,9 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 var channelID = query.FolderId.Split('_');
 
-
                 if (channelID[0] == "preset")
                 {
-                    items = await GetPresets(query, cancellationToken);
+                    items = await GetPresets(query, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -108,10 +107,8 @@ namespace MediaBrowser.Plugins.TuneIn
             };
         }
 
-        private async Task<List<ChannelItemInfo>> GetPresets(InternalChannelItemQuery query,
-            CancellationToken cancellationToken)
+        private async Task<List<ChannelItemInfo>> GetPresets(InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
-            var page = new HtmlDocument();
             var items = new List<ChannelItemInfo>();
             var url = "http://opml.radiotime.com/Browse.ashx?c=presets&formats=mp3,aac&partnerid=" + partnerid + "&serial=" +
                       _appHost.SystemId;
@@ -121,18 +118,23 @@ namespace MediaBrowser.Plugins.TuneIn
                 url = url + "&username=" + Plugin.Instance.Configuration.Username;
             }
 
-            try
+            using (var response = await _httpClient.SendAsync(new HttpRequestOptions
             {
-                using (var response = await _httpClient.SendAsync(new HttpRequestOptions
-                {
-                    Url = url,
-                    CancellationToken = CancellationToken.None
+                Url = url,
+                CancellationToken = cancellationToken
 
-                }, "GET").ConfigureAwait(false))
+            }, "GET").ConfigureAwait(false))
+            {
+                using (var site = response.Content)
                 {
-                    using (var site = response.Content)
+                    using (var ms = new MemoryStream())
                     {
-                        page.Load(site, Encoding.UTF8);
+                        await site.CopyToAsync(ms, 81920, cancellationToken).ConfigureAwait(false);
+
+                        ms.Position = 0;
+
+                        var page = new HtmlDocument();
+                        page.Load(ms, Encoding.UTF8);
                         if (page.DocumentNode != null)
                         {
                             var body = page.DocumentNode.SelectSingleNode("//body");
@@ -169,18 +171,12 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.Error(ex.ToString());
-            }
 
             return items.ToList();
         }
 
-        private
-            async Task<List<ChannelItemInfo>> GetMenu(String title, InternalChannelItemQuery query, CancellationToken cancellationToken)
+        private async Task<List<ChannelItemInfo>> GetMenu(String title, InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
-            var page = new HtmlDocument();
             var items = new List<ChannelItemInfo>();
             var url = "http://opml.radiotime.com/Browse.ashx?formats=mp3,aac&partnerid=" + partnerid + "&serial=" +
                       _appHost.SystemId;
@@ -192,18 +188,23 @@ namespace MediaBrowser.Plugins.TuneIn
 
             if (query.FolderId != null) url = query.FolderId.Replace("&amp;", "&");
 
-            try
+            using (var response = await _httpClient.SendAsync(new HttpRequestOptions
             {
-                using (var response = await _httpClient.SendAsync(new HttpRequestOptions
-                {
-                    Url = url,
-                    CancellationToken = CancellationToken.None
+                Url = url,
+                CancellationToken = cancellationToken
 
-                }, "GET").ConfigureAwait(false))
+            }, "GET").ConfigureAwait(false))
+            {
+                using (var site = response.Content)
                 {
-                    using (var site = response.Content)
+                    using (var ms = new MemoryStream())
                     {
-                        page.Load(site, Encoding.UTF8);
+                        await site.CopyToAsync(ms, 81920, cancellationToken).ConfigureAwait(false);
+
+                        ms.Position = 0;
+
+                        var page = new HtmlDocument();
+                        page.Load(ms, Encoding.UTF8);
                         if (page.DocumentNode != null)
                         {
                             var body = page.DocumentNode.SelectSingleNode("//body");
@@ -314,129 +315,118 @@ namespace MediaBrowser.Plugins.TuneIn
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.Error(ex.ToString());
-            }
 
             return items.ToList();
         }
 
 
-        public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id,
-            CancellationToken cancellationToken)
+        public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
         {
             var channelID = id.Split('_');
             var items = new List<MediaSourceInfo>();
-            try
+
+            using (var outerResponse = await _httpClient.SendAsync(new HttpRequestOptions
             {
-                using (var outerResponse = await _httpClient.SendAsync(new HttpRequestOptions
-                {
-                    Url = channelID[1] + "&formats=mp3,aac",
-                    CancellationToken = CancellationToken.None
+                Url = channelID[1] + "&formats=mp3,aac",
+                CancellationToken = cancellationToken
 
-                }, "GET").ConfigureAwait(false))
+            }, "GET").ConfigureAwait(false))
+            {
+                using (var site = outerResponse.Content)
                 {
-                    using (var site = outerResponse.Content)
+                    using (var reader = new StreamReader(site))
                     {
-                        using (var reader = new StreamReader(site))
+                        while (!reader.EndOfStream)
                         {
-                            while (!reader.EndOfStream)
+                            var url = await reader.ReadLineAsync().ConfigureAwait(false);
+                            _logger.Debug("FILE NAME : " + url.Split('/').Last().Split('?').First());
+
+                            var ext = Path.GetExtension(url.Split('/').Last().Split('?').First());
+
+                            _logger.Debug("URL : " + url);
+                            if (!string.IsNullOrEmpty(ext))
                             {
-                                var url = reader.ReadLine();
-                                _logger.Debug("FILE NAME : " + url.Split('/').Last().Split('?').First());
-
-                                var ext = Path.GetExtension(url.Split('/').Last().Split('?').First());
-
-                                _logger.Debug("URL : " + url);
-                                if (!string.IsNullOrEmpty(ext))
+                                _logger.Debug("Extension : " + ext);
+                                if (ext == ".pls")
                                 {
-                                    _logger.Debug("Extension : " + ext);
-                                    if (ext == ".pls")
+                                    try
                                     {
-                                        try
+                                        using (var response = await _httpClient.SendAsync(new HttpRequestOptions
                                         {
-                                            using (var response = await _httpClient.SendAsync(new HttpRequestOptions
-                                            {
-                                                Url = url,
-                                                CancellationToken = CancellationToken.None
+                                            Url = url,
+                                            CancellationToken = cancellationToken
 
-                                            }, "GET").ConfigureAwait(false))
+                                        }, "GET").ConfigureAwait(false))
+                                        {
+                                            using (var value = response.Content)
                                             {
-                                                using (var value = response.Content)
+                                                var parser = new IniParser(value);
+                                                var count = Convert.ToInt16(parser.GetSetting("playlist", "NumberOfEntries"));
+                                                _logger.Debug("COUNT : " + count);
+                                                for (var i = 0; i < count; i++)
                                                 {
-                                                    var parser = new IniParser(value);
-                                                    var count = Convert.ToInt16(parser.GetSetting("playlist", "NumberOfEntries"));
-                                                    _logger.Debug("COUNT : " + count);
-                                                    for (var i = 0; i < count; i++)
-                                                    {
-                                                        var file = parser.GetSetting("playlist", "File" + count);
-                                                        _logger.Debug("FILE : " + count + " - " + file);
+                                                    var file = parser.GetSetting("playlist", "File" + count);
+                                                    _logger.Debug("FILE : " + count + " - " + file);
 
+                                                    items.Add(new ChannelMediaInfo
+                                                    {
+                                                        Path = file.ToLower()
+                                                    }.ToMediaSource());
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.Error(ex.ToString());
+                                    }
+                                }
+                                else if (ext == ".m3u")
+                                {
+                                    try
+                                    {
+                                        using (var response = await _httpClient.SendAsync(new HttpRequestOptions
+                                        {
+                                            Url = url,
+                                            CancellationToken = cancellationToken
+
+                                        }, "GET").ConfigureAwait(false))
+                                        {
+                                            using (var value = response.Content)
+                                            {
+                                                using (var reader2 = new StreamReader(value))
+                                                {
+                                                    while (!reader2.EndOfStream)
+                                                    {
+                                                        var url2 = await reader2.ReadLineAsync().ConfigureAwait(false);
                                                         items.Add(new ChannelMediaInfo
                                                         {
-                                                            Path = file.ToLower()
+                                                            Path = url2
                                                         }.ToMediaSource());
                                                     }
                                                 }
                                             }
                                         }
-                                        catch (Exception ex)
-                                        {
-                                            _logger.Error(ex.ToString());
-                                        }
                                     }
-                                    else if (ext == ".m3u")
+                                    catch (Exception ex)
                                     {
-                                        try
-                                        {
-                                            using (var response = await _httpClient.SendAsync(new HttpRequestOptions
-                                            {
-                                                Url = url,
-                                                CancellationToken = CancellationToken.None
-
-                                            }, "GET").ConfigureAwait(false))
-                                            {
-                                                using (var value = response.Content)
-                                                {
-                                                    using (var reader2 = new StreamReader(value))
-                                                    {
-                                                        while (!reader2.EndOfStream)
-                                                        {
-                                                            var url2 = reader2.ReadLine();
-                                                            items.Add(new ChannelMediaInfo
-                                                            {
-                                                                Path = url2
-                                                            }.ToMediaSource());
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            _logger.Error(ex.ToString());
-                                        }
-                                    }
-                                    else
-                                    {
-                                        items.Add(GetMediaInfoFromUrl(url));
+                                        _logger.Error(ex.ToString());
                                     }
                                 }
                                 else
                                 {
-                                    _logger.Debug("Normal URL");
-
                                     items.Add(GetMediaInfoFromUrl(url));
                                 }
+                            }
+                            else
+                            {
+                                _logger.Debug("Normal URL");
+
+                                items.Add(GetMediaInfoFromUrl(url));
                             }
                         }
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex.ToString());
             }
 
             return items;
