@@ -84,7 +84,7 @@ namespace MediaBrowser.Plugins.TuneIn
             {
                 var channelID = query.FolderId.Split('_');
 
-                if (channelID[0] == "preset")
+                if (string.Equals(channelID[0], "preset", StringComparison.OrdinalIgnoreCase))
                 {
                     items = await GetPresets(query, cancellationToken).ConfigureAwait(false);
                 }
@@ -209,6 +209,11 @@ namespace MediaBrowser.Plugins.TuneIn
                         {
                             var body = page.DocumentNode.SelectSingleNode("//body");
 
+                            if (body == null)
+                            {
+                                return items;
+                            }
+
                             if (body.SelectNodes("./outline[@url and not(@type=\"audio\")]") != null)
                             {
                                 _logger.Debug("Num 1");
@@ -257,56 +262,63 @@ namespace MediaBrowser.Plugins.TuneIn
                                     });
                                 }
                             }
-                            else if (body.SelectNodes("./outline[@text and not(@url) and not(@key=\"related\")]") != null && title == "")
+                            else if (body.SelectNodes("./outline[@text and not(@url) and not(@key=\"related\")]") != null && string.IsNullOrEmpty(title))
                             {
                                 _logger.Debug("Num 3");
                                 foreach (
                                     var node in body.SelectNodes("./outline[@text and not(@url) and not(@key=\"related\")]"))
                                 {
-                                    if (node.Attributes["text"].Value == "No stations or shows available")
+                                    if (node.Attributes["text"] == null || string.Equals(node.Attributes["text"].Value, "No stations or shows available", StringComparison.OrdinalIgnoreCase))
                                     {
-                                        throw new Exception("No stations or shows available");
-                                    }
-
-                                    items.Add(new ChannelItemInfo
-                                    {
-                                        Name = HttpUtility.HtmlDecode(node.Attributes["text"].Value),
-                                        Id = "subcat_" + query.FolderId + "_" + node.Attributes["text"].Value,
-                                        Type = ChannelItemType.Folder,
-                                    });
-                                }
-                            }
-                            else if (title != "")
-                            {
-                                _logger.Debug("Num 4");
-                                foreach (var node in body.SelectNodes(String.Format("./outline[@text=\"{0}\"]/outline", title)))
-                                {
-                                    var type = node.Attributes["type"].Value;
-                                    _logger.Debug("Type : " + type);
-                                    if (type == "audio")
-                                    {
-                                        items.Add(new ChannelItemInfo
-                                        {
-                                            Name = HttpUtility.HtmlDecode(node.Attributes["text"].Value),
-                                            Id = "stream_" + node.Attributes["url"].Value,
-                                            Type = ChannelItemType.Media,
-                                            ContentType = ChannelMediaContentType.Podcast,
-                                            ImageUrl = node.Attributes["image"].Value,
-                                            MediaType = ChannelMediaType.Audio,
-
-                                        });
+                                        //throw new Exception("No stations or shows available");
                                     }
                                     else
                                     {
-                                        var imageNode = node.Attributes["image"];
-
                                         items.Add(new ChannelItemInfo
                                         {
                                             Name = HttpUtility.HtmlDecode(node.Attributes["text"].Value),
-                                            Id = "subcat_" + node.Attributes["url"].Value,
-                                            ImageUrl = imageNode != null ? imageNode.Value : "",
+                                            Id = "subcat_" + query.FolderId + "_" + node.Attributes["text"].Value,
                                             Type = ChannelItemType.Folder,
                                         });
+                                    }
+                                }
+                            }
+                            else if (!string.IsNullOrEmpty(title))
+                            {
+                                _logger.Debug("Num 4");
+
+                                var nodes = body.SelectNodes(String.Format("./outline[@text=\"{0}\"]/outline", title));
+                                if (nodes != null)
+                                {
+                                    foreach (var node in nodes)
+                                    {
+                                        var type = node.Attributes["type"].Value;
+                                        _logger.Debug("Type : " + type);
+                                        if (string.Equals(type, "audio", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            items.Add(new ChannelItemInfo
+                                            {
+                                                Name = HttpUtility.HtmlDecode(node.Attributes["text"].Value),
+                                                Id = "stream_" + node.Attributes["url"].Value,
+                                                Type = ChannelItemType.Media,
+                                                ContentType = ChannelMediaContentType.Podcast,
+                                                ImageUrl = node.Attributes["image"].Value,
+                                                MediaType = ChannelMediaType.Audio,
+
+                                            });
+                                        }
+                                        else
+                                        {
+                                            var imageNode = node.Attributes["image"];
+
+                                            items.Add(new ChannelItemInfo
+                                            {
+                                                Name = HttpUtility.HtmlDecode(node.Attributes["text"].Value),
+                                                Id = "subcat_" + node.Attributes["url"].Value,
+                                                ImageUrl = imageNode != null ? imageNode.Value : "",
+                                                Type = ChannelItemType.Folder,
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -316,7 +328,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 }
             }
 
-            return items.ToList();
+            return items;
         }
 
 
@@ -347,7 +359,7 @@ namespace MediaBrowser.Plugins.TuneIn
                             if (!string.IsNullOrEmpty(ext))
                             {
                                 _logger.Debug("Extension : " + ext);
-                                if (ext == ".pls")
+                                if (string.Equals(ext, ".pls", StringComparison.OrdinalIgnoreCase))
                                 {
                                     try
                                     {
@@ -381,7 +393,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                         _logger.Error(ex.ToString());
                                     }
                                 }
-                                else if (ext == ".m3u")
+                                else if (string.Equals(ext, ".m3u", StringComparison.OrdinalIgnoreCase))
                                 {
                                     try
                                     {
