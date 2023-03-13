@@ -30,6 +30,11 @@ namespace MediaBrowser.Plugins.TuneIn
                 {
                     Name = "tunein",
                     EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html"
+                },
+                new PluginPageInfo
+                {
+                    Name = "tuneinjs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.js"
                 }
             };
         }
