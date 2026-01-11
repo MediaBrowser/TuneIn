@@ -20,6 +20,7 @@ using MediaBrowser.Common;
 using MediaBrowser.Model.MediaInfo;
 using MediaBrowser.Model.Dto;
 using System.Web;
+using System.Net.Http;
 
 namespace MediaBrowser.Plugins.TuneIn
 {
@@ -118,7 +119,7 @@ namespace MediaBrowser.Plugins.TuneIn
                 url = url + "&username=" + Plugin.Instance.Configuration.Username;
             }
 
-            using (var response = await _httpClient.SendAsync(new HttpRequestOptions
+            using (var response = await SendRequest(new HttpRequestOptions
             {
                 Url = url,
                 CancellationToken = cancellationToken
@@ -188,7 +189,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
             if (query.FolderId != null) url = query.FolderId.Replace("&amp;", "&");
 
-            using (var response = await _httpClient.SendAsync(new HttpRequestOptions
+            using (var response = await SendRequest(new HttpRequestOptions
             {
                 Url = url,
                 CancellationToken = cancellationToken
@@ -331,13 +332,34 @@ namespace MediaBrowser.Plugins.TuneIn
             return items;
         }
 
+        private static long _lastRequestTicks;
+        // The limit is 50 requests per second
+        private static int requestIntervalMs = 500;
+        private async Task<HttpResponseInfo> SendRequest(HttpRequestOptions options, string method)
+        {
+            var delayTicks = (requestIntervalMs * 10000) - (DateTimeOffset.UtcNow.Ticks - _lastRequestTicks);
+            var delayMs = Math.Min(delayTicks / 10000, requestIntervalMs);
+
+            if (delayMs > 0)
+            {
+                _logger.Debug("Throttling TuneIn by {0} ms", delayMs);
+                await Task.Delay(Convert.ToInt32(delayMs)).ConfigureAwait(false);
+            }
+            
+            _lastRequestTicks = DateTimeOffset.UtcNow.Ticks;
+
+            options.BufferContent = true;
+
+            return await _httpClient.SendAsync(options, method).ConfigureAwait(false);
+        }
+
 
         public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
         {
             var channelID = id.Split('_');
             var items = new List<MediaSourceInfo>();
 
-            using (var outerResponse = await _httpClient.SendAsync(new HttpRequestOptions
+            using (var outerResponse = await SendRequest(new HttpRequestOptions
             {
                 Url = channelID[1] + "&formats=mp3,aac",
                 CancellationToken = cancellationToken
@@ -363,7 +385,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                 {
                                     try
                                     {
-                                        using (var response = await _httpClient.SendAsync(new HttpRequestOptions
+                                        using (var response = await SendRequest(new HttpRequestOptions
                                         {
                                             Url = url,
                                             CancellationToken = cancellationToken
@@ -397,7 +419,7 @@ namespace MediaBrowser.Plugins.TuneIn
                                 {
                                     try
                                     {
-                                        using (var response = await _httpClient.SendAsync(new HttpRequestOptions
+                                        using (var response = await SendRequest(new HttpRequestOptions
                                         {
                                             Url = url,
                                             CancellationToken = cancellationToken
