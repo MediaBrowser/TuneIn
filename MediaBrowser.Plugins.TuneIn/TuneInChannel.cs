@@ -334,7 +334,7 @@ namespace MediaBrowser.Plugins.TuneIn
 
         private static long _lastRequestTicks;
         // The limit is 50 requests per second
-        private static int requestIntervalMs = 500;
+        private static int requestIntervalMs = 3000;
         private async Task<HttpResponseInfo> SendRequest(HttpRequestOptions options, string method)
         {
             var delayTicks = (requestIntervalMs * 10000) - (DateTimeOffset.UtcNow.Ticks - _lastRequestTicks);
