@@ -189,6 +189,24 @@ namespace MediaBrowser.Plugins.TuneIn
 
             if (query.FolderId != null) url = query.FolderId.Replace("&amp;", "&");
 
+            if (url.EndsWith("#", StringComparison.Ordinal)
+                && Uri.TryCreate(url, UriKind.Absolute, out var browseUri)
+                && (browseUri.Scheme == "http" || browseUri.Scheme == "https")
+                && browseUri.Host.Equals("opml.radiotime.com", StringComparison.OrdinalIgnoreCase)
+                && browseUri.AbsolutePath == "/Browse.ashx"
+                && browseUri.Fragment == "#")
+            {
+                var parameters = HttpUtility.ParseQueryString(browseUri.Query);
+                var lastParameter = HttpUtility.UrlDecode(browseUri.Query
+                    .Substring(browseUri.Query.LastIndexOf('&') + 1).TrimStart('?'));
+                if ((lastParameter == "filter=s:~" || lastParameter == "filter=p:~")
+                    && parameters.GetValues("filter")?.Length == 1)
+                {
+                    // TuneIn sometimes leaves the # alphabet filter unescaped in pagination links.
+                    url = url.Substring(0, url.Length - 1) + "%23";
+                }
+            }
+
             using (var response = await SendRequest(new HttpRequestOptions
             {
                 Url = url,
