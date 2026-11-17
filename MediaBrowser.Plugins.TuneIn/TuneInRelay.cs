@@ -71,7 +71,8 @@ namespace MediaBrowser.Plugins.TuneIn
             return PublicAddressPolicy.ValidateUri(new UriBuilder(uri) { Scheme = "https", Port = -1 }.Uri.AbsoluteUri, true);
         }
 
-        internal async Task<SafeResponse> OpenAsync(string stationId, CancellationToken token, Action<string> warning)
+        internal async Task<SafeResponse> OpenAsync(string stationId, CancellationToken token, Action<string> warning,
+            Func<SafeResponse, CancellationToken, Stream> decode = null)
         {
             ValidateStation(stationId);
             // This source owns the connection until the relay body is disposed, not just until headers arrive.
@@ -88,8 +89,7 @@ namespace MediaBrowser.Plugins.TuneIn
                     var urls = PlaylistUrls(text).Take(9).ToList();
                     if (urls.Count == 0 || urls.Count > 8)
                         throw new InvalidDataException("TuneIn returned an empty or oversized stream list.");
-                    RejectPreRoll(urls);
-                    audio = await OpenAlternativesAsync(urls, operation.Token, warning).ConfigureAwait(false);
+                    audio = await OpenListAsync(urls, operation.Token, warning, decode, 0, new ResolutionBudget()).ConfigureAwait(false);
                 }
                 operation.Token.ThrowIfCancellationRequested();
                 operation.CancelAfter(Timeout.InfiniteTimeSpan);
@@ -106,17 +106,81 @@ namespace MediaBrowser.Plugins.TuneIn
             }
         }
 
-        private async Task<SafeResponse> OpenAlternativesAsync(IEnumerable<string> urls, CancellationToken token, Action<string> warning)
+        private async Task<SafeResponse> OpenListAsync(List<string> urls, CancellationToken token, Action<string> warning,
+            Func<SafeResponse, CancellationToken, Stream> decode, int depth, ResolutionBudget budget)
         {
-            var pending = new Queue<KeyValuePair<string, int>>(urls.Select(url => new KeyValuePair<string, int>(url, 0)));
+            var preRolls = urls.TakeWhile(IsProviderPreRoll).ToList();
+            if (urls.Skip(preRolls.Count).Any(IsProviderPreRoll) || preRolls.Count == urls.Count)
+                throw new InvalidOperationException("TuneIn returned an invalid required pre-roll/live order.");
+            if (preRolls.Count == 0)
+                return await OpenAlternativesAsync(urls, token, warning, decode, depth, budget).ConfigureAwait(false);
+            if (decode == null)
+                throw new InvalidOperationException("TuneIn pre-roll playback requires the host audio decoder.");
+
+            var stages = new Queue<Func<CancellationToken, Task<SafeResponse>>>();
+            foreach (var url in preRolls)
+                stages.Enqueue(ct => OpenStageAsync(async opening =>
+                {
+                    budget.Consume();
+                    var ad = await transport.OpenAsync(url, false, opening).ConfigureAwait(false);
+                    if (!IsAudio(ad.ContentType))
+                    {
+                        ad.Dispose();
+                        throw new InvalidDataException("Unsupported required TuneIn pre-roll content.");
+                    }
+                    return ad;
+                }, ct));
+            // Only recognized leading ads are sequential; select exactly ONE live alternative.
+            stages.Enqueue(ct => OpenStageAsync(opening =>
+                OpenAlternativesAsync(urls.Skip(preRolls.Count), opening, warning, decode, depth, budget), ct));
+            var first = await stages.Dequeue()(token).ConfigureAwait(false);
+            return new SafeResponse(new PcmSequenceStream(first, stages, decode, token), "audio/wav");
+        }
+
+        private static async Task<SafeResponse> OpenStageAsync(Func<CancellationToken, Task<SafeResponse>> open, CancellationToken token)
+        {
+            var operation = CancellationTokenSource.CreateLinkedTokenSource(token);
+            operation.CancelAfter(TimeSpan.FromSeconds(30));
+            SafeResponse response = null;
+            try
+            {
+                response = await open(operation.Token).ConfigureAwait(false);
+                operation.Token.ThrowIfCancellationRequested();
+                operation.CancelAfter(Timeout.InfiniteTimeSpan);
+                return new SafeResponse(new RelayBodyStream(response, operation), response.ContentType);
+            }
+            catch { response?.Dispose(); operation.Cancel(); operation.Dispose(); throw; }
+        }
+
+        private sealed class ResolutionBudget
+        {
+            private int attempts;
+            internal bool Available => attempts < 16;
+            internal void Consume()
+            {
+                if (++attempts > 16) throw new InvalidOperationException("TuneIn stream-resolution attempt limit exceeded.");
+            }
+        }
+
+        private static bool IsAudio(string contentType) =>
+            contentType == "audio/mpeg" || contentType == "audio/mp3" || contentType == "audio/aac"
+            || contentType == "audio/aacp" || contentType == "application/octet-stream";
+
+        private async Task<SafeResponse> OpenAlternativesAsync(IEnumerable<string> urls, CancellationToken token, Action<string> warning,
+            Func<SafeResponse, CancellationToken, Stream> decode, int depth, ResolutionBudget budget)
+        {
+            var pending = new Queue<KeyValuePair<string, int>>(urls.Select(url => new KeyValuePair<string, int>(url, depth)));
             Exception lastFailure = null;
-            for (var attempts = 0; attempts < 16 && pending.Count > 0; attempts++)
+            while (budget.Available && pending.Count > 0)
             {
                 token.ThrowIfCancellationRequested();
                 var candidate = pending.Dequeue();
                 SafeResponse response = null;
+                List<string> sequence = null;
+                var required = false;
                 try
                 {
+                    budget.Consume();
                     response = await transport.OpenAsync(candidate.Key, false, token,
                         validateDestination: uri => RejectPreRoll(new[] { uri.AbsoluteUri })).ConfigureAwait(false);
                     var extension = Path.GetExtension(new Uri(candidate.Key).AbsolutePath);
@@ -129,31 +193,39 @@ namespace MediaBrowser.Plugins.TuneIn
                         if (candidate.Value >= 4) throw new InvalidDataException("Radio playlist nesting limit exceeded.");
                         var text = Encoding.UTF8.GetString(await ReadBoundedAsync(response.Body, 256 * 1024, token).ConfigureAwait(false));
                         if (text.Contains("#EXT-X-")) throw new InvalidDataException("HLS is not supported by the TuneIn relay.");
-                        var children = PlaylistUrls(text).Take(9).ToList();
+                        var children = new List<string>();
+                        foreach (var url in PlaylistUrls(text).Take(9))
+                        {
+                            required |= IsProviderPreRoll(url);
+                            children.Add(url);
+                        }
                         if (children.Count == 0 || children.Count > 8)
                             throw new InvalidDataException("Empty or oversized radio playlist.");
-                        RejectPreRoll(children);
-                        pending = new Queue<KeyValuePair<string, int>>(children.Select(url =>
-                            new KeyValuePair<string, int>(url, candidate.Value + 1)).Concat(pending).Take(16));
+                        if (required)
+                            sequence = children;
+                        else
+                            pending = new Queue<KeyValuePair<string, int>>(children.Select(url =>
+                                new KeyValuePair<string, int>(url, candidate.Value + 1)).Concat(pending).Take(16));
                     }
                     else
                     {
-                        if (response.ContentType != "audio/mpeg" && response.ContentType != "audio/mp3"
-                            && response.ContentType != "audio/aac" && response.ContentType != "audio/aacp"
-                            && response.ContentType != "application/octet-stream")
+                        if (!IsAudio(response.ContentType))
                             throw new InvalidDataException("Unsupported radio content type.");
                         var playable = response;
                         response = null;
                         return playable;
                     }
                 }
-                catch (Exception error) when (error is IOException || error is InvalidDataException || error is SocketException
-                    || error is AuthenticationException || error is TimeoutException)
+                catch (Exception error) when (!required && (error is IOException || error is InvalidDataException || error is SocketException
+                    || error is AuthenticationException || error is TimeoutException))
                 {
                     lastFailure = error;
                     warning("Advertised radio alternative failed; trying the next available alternative.");
                 }
                 finally { response?.Dispose(); }
+                // Required ads must never become a recoverable failed live alternative.
+                if (sequence != null)
+                    return await OpenListAsync(sequence, token, warning, decode, candidate.Value + 1, budget).ConfigureAwait(false);
             }
             throw new InvalidDataException("No radio stream could be opened within the relay limits.", lastFailure);
         }
@@ -169,7 +241,7 @@ namespace MediaBrowser.Plugins.TuneIn
         private static void RejectPreRoll(IEnumerable<string> urls)
         {
             if (urls.Any(IsProviderPreRoll))
-                throw new NotSupportedException("TuneIn pre-roll-to-live sequencing is not supported by this relay contribution.");
+                throw new NotSupportedException("A redirect to a required TuneIn pre-roll lacks an explicit pre-roll/live sequence.");
         }
 
         internal static IEnumerable<string> PlaylistUrls(string text)

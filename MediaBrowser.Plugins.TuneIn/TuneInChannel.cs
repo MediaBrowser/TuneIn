@@ -5,6 +5,7 @@ using System.Xml.Schema;
 using HtmlAgilityPack;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Channels;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Channels;
@@ -354,131 +355,12 @@ namespace MediaBrowser.Plugins.TuneIn
         }
 
 
-        public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
+        public Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
         {
-            var channelID = id.Split('_');
-            var items = new List<MediaSourceInfo>();
-
-            using (var outerResponse = await SendRequest(new HttpRequestOptions
-            {
-                Url = channelID[1] + "&formats=mp3,aac",
-                CancellationToken = cancellationToken
-
-            }, "GET").ConfigureAwait(false))
-            {
-                using (var site = outerResponse.Content)
-                {
-                    using (var reader = new StreamReader(site))
-                    {
-                        while (!reader.EndOfStream)
-                        {
-                            var url = await reader.ReadLineAsync().ConfigureAwait(false);
-                            _logger.Debug("FILE NAME : " + url.Split('/').Last().Split('?').First());
-
-                            var ext = Path.GetExtension(url.Split('/').Last().Split('?').First());
-
-                            _logger.Debug("URL : " + url);
-                            if (!string.IsNullOrEmpty(ext))
-                            {
-                                _logger.Debug("Extension : " + ext);
-                                if (string.Equals(ext, ".pls", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    try
-                                    {
-                                        using (var response = await SendRequest(new HttpRequestOptions
-                                        {
-                                            Url = url,
-                                            CancellationToken = cancellationToken
-
-                                        }, "GET").ConfigureAwait(false))
-                                        {
-                                            using (var value = response.Content)
-                                            {
-                                                var parser = new IniParser(value);
-                                                var count = Convert.ToInt16(parser.GetSetting("playlist", "NumberOfEntries"));
-                                                _logger.Debug("COUNT : " + count);
-                                                for (var i = 0; i < count; i++)
-                                                {
-                                                    var file = parser.GetSetting("playlist", "File" + count);
-                                                    _logger.Debug("FILE : " + count + " - " + file);
-
-                                                    items.Add(new ChannelMediaInfo
-                                                    {
-                                                        Path = file.ToLower()
-                                                    }.ToMediaSource());
-                                                }
-                                            }
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.Error(ex.ToString());
-                                    }
-                                }
-                                else if (string.Equals(ext, ".m3u", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    try
-                                    {
-                                        using (var response = await SendRequest(new HttpRequestOptions
-                                        {
-                                            Url = url,
-                                            CancellationToken = cancellationToken
-
-                                        }, "GET").ConfigureAwait(false))
-                                        {
-                                            using (var value = response.Content)
-                                            {
-                                                using (var reader2 = new StreamReader(value))
-                                                {
-                                                    while (!reader2.EndOfStream)
-                                                    {
-                                                        var url2 = await reader2.ReadLineAsync().ConfigureAwait(false);
-                                                        items.Add(new ChannelMediaInfo
-                                                        {
-                                                            Path = url2
-                                                        }.ToMediaSource());
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _logger.Error(ex.ToString());
-                                    }
-                                }
-                                else
-                                {
-                                    items.Add(GetMediaInfoFromUrl(url));
-                                }
-                            }
-                            else
-                            {
-                                _logger.Debug("Normal URL");
-
-                                items.Add(GetMediaInfoFromUrl(url));
-                            }
-                        }
-                    }
-                }
-            }
-
-            return items;
-        }
-
-        private MediaSourceInfo GetMediaInfoFromUrl(string url)
-        {
-            var container = url.EndsWith("aac", StringComparison.OrdinalIgnoreCase) ? "aac" : "mp3";
-
-            return new ChannelMediaInfo
-            {
-                Path = url,
-                Container = container,
-                AudioCodec = container,
-                AudioBitrate = 128000,
-                AudioChannels = 2,
-                SupportsDirectPlay = true
-            }.ToMediaSource();
+            cancellationToken.ThrowIfCancellationRequested();
+            var host = _appHost as IServerApplicationHost
+                ?? throw new InvalidOperationException("TuneIn playback requires the Emby server application host.");
+            return Task.FromResult<IEnumerable<MediaSourceInfo>>(new[] { TuneInRelay.CreateMediaSource(host, id) });
         }
 
         public Task<DynamicImageResponse> GetChannelImage(ImageType type, CancellationToken cancellationToken)

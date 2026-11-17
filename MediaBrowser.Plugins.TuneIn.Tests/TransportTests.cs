@@ -232,7 +232,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public async Task PreRollFailsExplicitlyInsteadOfSkippingOrConcatenating(bool nested)
+        public async Task PreRollWithoutDecoderFailsExplicitlyRatherThanSkipping(bool nested)
         {
             var audioRequests = 0;
             var transport = Transport(uri =>
@@ -243,7 +243,7 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
                 audioRequests++;
                 return Reply("audio/mpeg", "AD");
             });
-            await Assert.ThrowsAsync<NotSupportedException>(() =>
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 new TuneInRelay(transport).OpenAsync("s1", CancellationToken.None, _ => { }));
             Assert.Equal(0, audioRequests);
         }
@@ -421,11 +421,11 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
         public void HostVersionGateRejectsAffectedStableAndBetaServers(string version, bool expected) =>
             Assert.Equal(expected, Plugin.SupportsServerVersion(Version.Parse(version)));
 
-        private static SafeHttpTransport Transport(Func<Uri, Stream> response) => new SafeHttpTransport(
+        internal static SafeHttpTransport Transport(Func<Uri, Stream> response) => new SafeHttpTransport(
             _ => Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }),
             (_, uri, __) => Task.FromResult(response(uri)));
 
-        private static DuplexStream Reply(string type, string body) => new DuplexStream(
+        internal static DuplexStream Reply(string type, string body) => new DuplexStream(
             "HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\nContent-Length: "
             + Encoding.UTF8.GetByteCount(body) + "\r\n\r\n" + body);
 
@@ -473,11 +473,12 @@ namespace MediaBrowser.Plugins.TuneIn.Tests
             }
         }
 
-        private sealed class DuplexStream : MemoryStream
+        internal sealed class DuplexStream : MemoryStream
         {
             private readonly MemoryStream output = new MemoryStream();
             public bool Disposed { get; private set; }
             public DuplexStream(string response) : base(Encoding.UTF8.GetBytes(response)) { }
+            public DuplexStream(byte[] response) : base(response) { }
             public string Request => Encoding.ASCII.GetString(output.ToArray());
             public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken token) =>
                 output.WriteAsync(buffer, offset, count, token);

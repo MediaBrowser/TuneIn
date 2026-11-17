@@ -1,8 +1,12 @@
 using MediaBrowser.Controller.Net;
+using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Services;
 using System;
 using System.Net;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace MediaBrowser.Plugins.TuneIn
@@ -19,15 +23,18 @@ namespace MediaBrowser.Plugins.TuneIn
         private readonly IHttpResultFactory resultFactory;
         private readonly ILogger logger;
         private readonly TuneInRelay relay;
+        private readonly IFfmpegManager ffmpegManager;
 
-        public TuneInService(IHttpResultFactory resultFactory, ILogManager logManager)
-            : this(resultFactory, logManager, new TuneInRelay()) { }
+        public TuneInService(IHttpResultFactory resultFactory, ILogManager logManager, IFfmpegManager ffmpegManager)
+            : this(resultFactory, logManager, new TuneInRelay(), ffmpegManager) { }
 
-        internal TuneInService(IHttpResultFactory resultFactory, ILogManager logManager, TuneInRelay relay)
+        internal TuneInService(IHttpResultFactory resultFactory, ILogManager logManager, TuneInRelay relay,
+            IFfmpegManager ffmpegManager = null)
         {
             this.resultFactory = resultFactory ?? throw new ArgumentNullException(nameof(resultFactory));
             logger = logManager.GetLogger(GetType().Name);
             this.relay = relay;
+            this.ffmpegManager = ffmpegManager;
         }
 
         public IRequest Request { get; set; }
@@ -38,7 +45,8 @@ namespace MediaBrowser.Plugins.TuneIn
             if (remote?.IsIPv4MappedToIPv6 == true) remote = remote.MapToIPv4();
             if (!Request.IsSocketConnectionLocal || remote == null || !IPAddress.IsLoopback(remote))
                 throw new UnauthorizedAccessException("TuneIn relay access is restricted to this Emby server.");
-            var response = await relay.OpenAsync(request.Id, Request.CancellationToken, message => logger.Warn(message)).ConfigureAwait(false);
+            var response = await relay.OpenAsync(request.Id, Request.CancellationToken, message => logger.Warn(message),
+                DecodeAudio).ConfigureAwait(false);
             try
             {
                 Request.CancellationToken.ThrowIfCancellationRequested();
@@ -49,6 +57,13 @@ namespace MediaBrowser.Plugins.TuneIn
                 response.Dispose();
                 throw;
             }
+        }
+
+        private Stream DecodeAudio(Security.SafeResponse source, CancellationToken token)
+        {
+            var configuration = ffmpegManager?.FfmpegConfiguration;
+            return new PcmDecoderStream(configuration?.EncoderPath, source, token,
+                configuration?.EnvironmentVariables?.ToDictionary(setting => setting.VariableName, setting => setting.Value));
         }
     }
 }
